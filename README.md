@@ -209,7 +209,7 @@ accession, repository URL, and citation metadata before public release.
 
 If you use MonSNP-Pipeline, please cite:
 
-> Wang Y, et al. (2026). *Title of the paper*. GigaScience. DOI: To be added.
+> 
 
 Update `CITATION.cff` before release. MonSNP-Pipeline is distributed under the
 [MIT License](LICENSE); the vendored OligoMiner files retain their original
