@@ -1,0 +1,3 @@
+name	path	weight
+altitude	custom_altitude.bed	5
+priority	custom_priority.bed	20

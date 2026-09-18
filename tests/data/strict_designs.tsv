@@ -1,0 +1,3 @@
+snp_id	candidate_id	probe_status	probe_tier	probe_chrom	probe_start	probe_end	probe_sequence	probe_tm	center_distance_bp	strict_oligominer_pass
+ECA1:200	cand00000001	designed	strict_oligominer	ECA1	141	260	ACGT	60.0	0.5	yes
+ECA1:450	cand00000004	designed	strict_oligominer	ECA1	391	510	ACGT	60.0	0.5	yes

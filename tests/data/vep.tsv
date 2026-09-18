@@ -1,0 +1,8 @@
+## ENSEMBL VARIANT EFFECT PREDICTOR test fixture
+#Uploaded_variation	Location	Allele	Gene	Feature	Feature_type	Consequence
+ECA1_100_T/G	ECA1:100	G	GENE1	TR1	Transcript	intron_variant
+ECA1_150_C/T	ECA1:150	T	GENE1	TR1	Transcript	missense_variant
+ECA1_200_T/C	ECA1:200	C	-	-	-	intergenic_variant
+ECA1_450_C/A	ECA1:450	A	GENE2	TR2	Transcript	synonymous_variant
+ECA1_500_T/G	ECA1:500	G	GENE2	TR2	Transcript	upstream_gene_variant
+ECA1_600_T/C	ECA1:600	C	GENE3	TR3	Transcript	splice_donor_variant
