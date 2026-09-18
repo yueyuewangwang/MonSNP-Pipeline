@@ -1,0 +1,20 @@
+key	value	description
+selection_pur	50	Local adaptation core within PURs
+selection_local	30	Remaining local adaptation core
+selection_domestication	15	Domestication background region
+literature	6	Trait-associated literature gene body plus/minus 2 kb
+qtl	6	Curated quantitative trait locus
+conserved_200m	4	200-mammal conserved element
+conserved_100v	3	100-vertebrate conserved element
+vep_missense	9	VEP missense_variant
+vep_splice	9	Any VEP consequence containing splice
+vep_utr	8	VEP 5_prime_UTR_variant or 3_prime_UTR_variant
+vep_gene_end	8	VEP upstream_gene_variant or downstream_gene_variant
+vep_synonymous	4	VEP synonymous_variant
+vep_intronic	3	VEP intron_variant
+vep_intergenic	2	VEP intergenic_variant
+vep_unknown	1	Other consequence or no exact VEP match
+maf_lower_bound	0.05	Inclusive lower MAF bound
+maf_upper_bound	0.30	Inclusive upper MAF bound
+maf_multiplier	10	Multiplier within the bounded MAF interval
+maf_above_upper	3	Score above the upper MAF bound

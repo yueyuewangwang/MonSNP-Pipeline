@@ -1,0 +1,59 @@
+# Copy this file to a project-specific name and replace every data/ path.
+results_dir: results
+run_probe_design: true
+target_chromosomes: all
+weights: resources/scoring_weights.tsv
+
+# plink_bfile starts from PREFIX.bed/.bim/.fam. Use precomputed to supply
+# inputs.afreq and inputs.ld_tag_sets (precomputed window LD tag sets).
+genotype_source: plink_bfile
+
+inputs:
+  bfile: data/snp_filter
+  reference: data/Mongolian_horse_genome.fa
+  reference_fai: data/Mongolian_horse_genome.fa.fai
+  windows: data/Mongolian_horse.60K-target.windows.bed
+  vep: data/vep_output.tsv.gz
+  conserved_200m: data/conserved_200m.sites.tsv.gz
+  conserved_100v: data/conserved_100v.sites.tsv.gz
+  qtl: data/qtl.sites.tsv.gz
+  literature: data/literature_genes.sites.tsv.gz
+  expression: data/expression_support.tsv.gz
+  local_adaptation: data/local_adaptation.bed
+  pur_local_adaptation: data/pur_local_adaptation.bed
+  domestication: data/domestication.bed
+  # Optional existing panel. Leave empty for a de novo panel.
+  current_sites: ""
+
+scoring:
+  # study reproduces the original MAF/VEP/annotation/selection policy.
+  # custom needs only the genotype, windows, reference, and weighted_regions.
+  profile: study
+  include_maf: true
+  include_vep: true
+  region_aggregation: sum
+  weighted_regions: []
+  # Example:
+  # - name: altitude
+  #   path: data/altitude_candidates.bed
+  #   weight: 25
+
+parameters:
+  candidates_per_window: 10
+  flank_left: 121
+  flank_right: 120
+  threads: 8
+  plink_executable: plink
+  plink2_executable: plink2
+  plink_chr_set: 31
+  ld_maf: 0.05
+  ld_tag_kb: 100
+  ld_tag_r2: 0.8
+  ld_jobs: 4
+  ld_memory_mb_per_job: 2048
+  # study_compatible preserves the historical --from-bp START0 behavior.
+  ld_window_boundary: study_compatible
+  exclude_chromosomes:
+    - ECA_M
+    - MT
+    - Y

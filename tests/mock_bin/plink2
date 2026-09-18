@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Deterministic PLINK2 mock executable for dependency-free workflow tests."""
+
+import shutil
+import sys
+from pathlib import Path
+
+
+if "--version" in sys.argv:
+    print("PLINK v2.0.0-a.6.9 mock")
+    raise SystemExit(0)
+
+output = sys.argv[sys.argv.index("--out") + 1]
+Path(output).parent.mkdir(parents=True, exist_ok=True)
+test_data = Path(__file__).resolve().parents[1] / "data"
+
+if "--freq" in sys.argv:
+    shutil.copyfile(test_data / "variants.afreq", output + ".afreq")
+elif "--make-pgen" in sys.argv:
+    Path(output + ".pgen").write_bytes(b"PGEN_MOCK\n")
+    Path(output + ".pvar").write_text(
+        "#CHROM\tPOS\tID\tREF\tALT\n", encoding="utf-8"
+    )
+    Path(output + ".psam").write_text("#IID\n", encoding="utf-8")
+elif "--make-bed" in sys.argv:
+    if "--bfile" in sys.argv:
+        prefix = Path(sys.argv[sys.argv.index("--bfile") + 1])
+    else:
+        prefix = test_data / "plink" / "tiny"
+    for suffix in (".bed", ".bim", ".fam"):
+        shutil.copyfile(str(prefix) + suffix, output + suffix)
+else:
+    raise SystemExit(
+    "mock PLINK2 only supports --freq, --make-pgen, --make-bed, and --version"
+    )
+
+Path(output + ".log").write_text("mock PLINK2 test run\n", encoding="utf-8")

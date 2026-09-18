@@ -1,0 +1,38 @@
+name: smoke-test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  core-workflow:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Snakemake
+        run: pip install snakemake==9.24.0
+      - name: Compile workflow and input tools
+        run: python -m py_compile workflow/scripts/*.py tools/*.py
+      - name: Test core scripts
+        run: bash tests/run_smoke.sh
+      - name: Check workflow DAG
+        run: snakemake -s workflow/Snakefile --configfile tests/config.yaml --cores 1 run_annotation --dry-run
+      - name: Check PLINK and custom-scoring DAG
+        run: snakemake -s workflow/Snakefile --configfile tests/config_plink_custom.yaml --cores 1 run_scoring --dry-run
+      - name: Check complete scatter/gather DAG
+        run: snakemake -s workflow/Snakefile --configfile tests/config.yaml --cores 1 run_full --dry-run
+      - name: Run core workflow
+        run: snakemake -s workflow/Snakefile --configfile tests/config.yaml --cores 1 run_scoring --rerun-incomplete
+      - name: Run PLINK and custom-scoring workflow
+        run: snakemake -s workflow/Snakefile --configfile tests/config_plink_custom.yaml --cores 1 run_scoring --rerun-incomplete
+      - name: Check PLINK and custom-scoring results
+        run: python tests/assert_plink_custom.py tests/work/plink_custom_results
+      - name: Run two-chromosome scatter/gather workflow
+        run: snakemake -s workflow/Snakefile --configfile tests/config_multichrom.yaml --cores 2 run_scoring --rerun-incomplete
+      - name: Check two-chromosome scatter/gather results
+        run: python tests/assert_multichrom.py tests/work/multichrom_results

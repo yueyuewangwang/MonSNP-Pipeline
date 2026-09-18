@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Small deterministic PLINK --show-tags mock for workflow tests."""
+
+import sys
+from pathlib import Path
+
+
+if "--version" in sys.argv:
+    print("PLINK v1.90b7.7 mock")
+    raise SystemExit(0)
+
+
+def value(flag):
+    return sys.argv[sys.argv.index(flag) + 1]
+
+
+bfile = value("--bfile")
+chrom = value("--chr")
+start = int(value("--from-bp"))
+end = int(value("--to-bp"))
+output = value("--out")
+variants = []
+with open(bfile + ".bim", encoding="utf-8") as handle:
+    for line in handle:
+        if not line.strip():
+            continue
+        fields = line.split()
+        if fields[0] == chrom and start <= int(fields[3]) <= end:
+            variants.append((fields[1], fields[0], fields[3]))
+if not variants:
+    print("Error: All variants excluded.")
+    raise SystemExit(1)
+
+with open(output + ".tags.list", "w", encoding="utf-8") as handle:
+    handle.write(" SNP CHR BP NTAG LEFT RIGHT KBSPAN TAGS\n")
+    for snp, snp_chrom, pos in variants:
+        tags = "|".join(item[0] for item in variants if item[0] != snp) or "NONE"
+        handle.write(
+            f"{snp} {snp_chrom} {pos} {len(variants)-1} {pos} {pos} 0 {tags}\n"
+        )
+Path(output + ".log").write_text("mock PLINK test run\n", encoding="utf-8")

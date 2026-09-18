@@ -1,0 +1,11 @@
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=2.7.18
+  - biopython=1.70
+  - numpy=1.16.6
+  - bowtie2=2.3.5.1
+  - jellyfish=2.2.10
+  - tbb=2020.2

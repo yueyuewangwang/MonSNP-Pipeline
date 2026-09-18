@@ -1,0 +1,9 @@
+usage:
+  mandatory-flags:
+    desc: Use a project-specific input configuration.
+    flags: --configfile config/my_run.yaml
+  software-stack-deployment:
+    conda: true
+    apptainer: false
+    apptainer+conda: false
+  report: false

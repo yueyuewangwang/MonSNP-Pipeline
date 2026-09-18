@@ -1,0 +1,30 @@
+# Workflow state and outputs
+.snakemake/
+results/
+tests/work/
+demo/work/
+logs/
+
+# Local study data and configurations
+data/
+config/local*.yaml
+config/my_run.yaml
+*.fam
+!tests/data/plink/tiny.fam
+*.bed.bak
+
+# Large regenerable bioinformatics files
+*.sam
+*.bam
+*.cram
+*.bt2
+*.bt2l
+*.jf
+*.pyc
+__pycache__/
+.conda/
+
+# Editor and operating-system files
+.DS_Store
+*.swp
+*~

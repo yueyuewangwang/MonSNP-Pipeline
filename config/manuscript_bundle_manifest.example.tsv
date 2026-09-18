@@ -1,0 +1,15 @@
+item	relative_path
+vep_113_output	inputs/filtered_vep_results.txt
+legacy_full_snp_scores	inputs/snp_filter_snp_scores.tsv
+legacy_window_best_snp	inputs/snp_filter_important_ld_tag_set_snp.tsv
+legacy_window_status	inputs/snp_filter_window_status.tsv
+window_ld_tag_sets	inputs/window_ld_tag_sets.tsv
+windows	inputs/Mongolian_horse.60K-target.windows.bed
+old_strict_panel	inputs/strict_probe_panel_with_alternatives.tsv
+all_existing_probes	inputs/all_probes.bed
+reference_fasta	inputs/Mongolian_horse_genome.fa
+source_bim	inputs/snp_filter.bim
+jellyfish_25mer	inputs/Mongolian_horse_genome.25mer.jf
+final_panel_tsv	outputs/revised_strict_probe_panel.tsv
+final_panel_bed	outputs/revised_strict_probe_panel.bed
+independent_validation	outputs/independent_validation.json

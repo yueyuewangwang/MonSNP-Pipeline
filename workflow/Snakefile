@@ -1,0 +1,674 @@
+"""MonSNP-Pipeline: reproducible SNP-array design workflow."""
+
+import csv
+import json
+import os
+import shlex
+from collections import OrderedDict
+from pathlib import Path
+
+from snakemake.exceptions import WorkflowError
+from snakemake.utils import validate
+
+
+configfile: "config/config.yaml"
+validate(config, workflow.source_path("schemas/config.schema.yaml"))
+
+
+RESULTS = config.get("results_dir", "results")
+INPUTS = config["inputs"]
+PARAMS = config.get("parameters", {})
+SCORING = config.get("scoring", {"profile": "study"})
+PROFILE = SCORING.get("profile", "study")
+GENOTYPE_SOURCE = config.get("genotype_source", "precomputed")
+RUN_PROBES = config.get("run_probe_design", False)
+SCRIPTS = os.path.join(workflow.basedir, "scripts")
+VENDOR_OLIGO = os.path.join(workflow.basedir, "vendor", "OligoMiner")
+CUSTOM_TRACKS = SCORING.get("weighted_regions", [])
+INCLUDE_VEP = PROFILE == "study" or SCORING.get("include_vep", False)
+
+
+def selected_chromosomes():
+    """Resolve ``all`` from the design-window file while preserving file order."""
+    windows = Path(INPUTS["windows"])
+    if not windows.is_file():
+        raise WorkflowError(
+            f"Cannot resolve target_chromosomes because the window file is missing: {windows}. "
+            "Generate it with tools/make_windows.py before starting Snakemake."
+        )
+    available = []
+    seen = set()
+    with windows.open(encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.strip() or line.startswith("#"):
+                continue
+            chrom = line.split("\t", 1)[0]
+            if chrom not in seen:
+                seen.add(chrom)
+                available.append(chrom)
+    if not available:
+        raise WorkflowError(f"No chromosomes were found in the window file: {windows}")
+
+    requested = config.get("target_chromosomes", "all")
+    excluded = set(PARAMS.get("exclude_chromosomes", []))
+    if requested == "all":
+        selected = [chrom for chrom in available if chrom not in excluded]
+    else:
+        selected = list(requested)
+        missing = [chrom for chrom in selected if chrom not in seen]
+        blocked = [chrom for chrom in selected if chrom in excluded]
+        if missing:
+            raise WorkflowError(
+                "target_chromosomes contains values absent from inputs.windows: "
+                + ", ".join(missing)
+            )
+        if blocked:
+            raise WorkflowError(
+                "target_chromosomes also lists excluded chromosomes: " + ", ".join(blocked)
+            )
+    if not selected:
+        raise WorkflowError("No target chromosomes remain after applying exclude_chromosomes")
+    return selected
+
+
+def concatenate_files(paths, output_path, headered=False):
+    """Concatenate deterministic chromosome shards, validating repeated headers."""
+    output_path = Path(str(output_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    expected_header = None
+    with output_path.open("w", encoding="utf-8", newline="") as output:
+        for path in map(str, paths):
+            with open(path, encoding="utf-8", errors="replace") as source:
+                if not headered:
+                    for line in source:
+                        output.write(line)
+                    continue
+                header = source.readline()
+                if not header:
+                    raise WorkflowError(f"Headered shard is empty: {path}")
+                if expected_header is None:
+                    expected_header = header
+                    output.write(header)
+                elif header != expected_header:
+                    raise WorkflowError(f"Header mismatch while gathering chromosome shard: {path}")
+                for line in source:
+                    output.write(line)
+
+
+def merge_count_tables(
+    paths, output_path, constant_metrics=(), header=("metric", "value")
+):
+    """Sum two-column counts; require geometry/configuration metrics to agree."""
+    constants = set(constant_metrics)
+    values = OrderedDict()
+    for path in map(str, paths):
+        with open(path, encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle, delimiter="\t")
+            header = next(reader, None)
+            if header is None or len(header) < 2:
+                raise WorkflowError(f"Invalid two-column summary: {path}")
+            for row in reader:
+                if len(row) < 2:
+                    continue
+                key, value = row[0], row[1]
+                if key in constants:
+                    if key in values and values[key] != value:
+                        raise WorkflowError(f"Inconsistent {key} across chromosome shards")
+                    values[key] = value
+                else:
+                    try:
+                        values[key] = str(int(values.get(key, "0")) + int(value))
+                    except ValueError as exc:
+                        raise WorkflowError(f"Nonnumeric count for {key} in {path}") from exc
+    output_path = Path(str(output_path))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as output:
+        output.write(f"{header[0]}\t{header[1]}\n")
+        for key, value in values.items():
+            output.write(f"{key}\t{value}\n")
+
+
+TARGET_CHROMS = selected_chromosomes()
+TARGET_WINDOWS = f"{RESULTS}/00_inputs/target_windows.bed"
+AFREQ = f"{RESULTS}/00_plink/variants.afreq"
+LD_TAG_SETS = f"{RESULTS}/00_plink/window_ld_tag_sets.tsv"
+VEP_SCORES = f"{RESULTS}/01_annotation/vep_scores.tsv.gz"
+WEIGHTED_MANIFEST = f"{RESULTS}/00_inputs/weighted_regions.tsv" if CUSTOM_TRACKS else ""
+
+WINDOW_SHARDS = expand(
+    f"{RESULTS}/00_inputs/by_chrom/{{chrom}}/windows.bed", chrom=TARGET_CHROMS
+)
+AFREQ_SHARDS = expand(
+    f"{RESULTS}/00_plink/by_chrom/{{chrom}}/variants.afreq", chrom=TARGET_CHROMS
+)
+LD_SHARDS = expand(
+    f"{RESULTS}/00_plink/by_chrom/{{chrom}}/window_ld_tag_sets.tsv",
+    chrom=TARGET_CHROMS,
+)
+LD_SUMMARY_SHARDS = expand(
+    f"{RESULTS}/00_plink/by_chrom/{{chrom}}/window_ld_tag_sets.summary.json",
+    chrom=TARGET_CHROMS,
+)
+
+ANNOTATION_TARGETS = [AFREQ, TARGET_WINDOWS]
+if INCLUDE_VEP:
+    ANNOTATION_TARGETS.extend(
+        [VEP_SCORES, f"{RESULTS}/01_annotation/vep_scores.summary.json"]
+    )
+
+SCORING_TARGETS = [
+    f"{RESULTS}/02_scoring/snp_filter_snp_scores.tsv",
+    f"{RESULTS}/02_scoring/snp_filter_important_ld_tag_set_snp.tsv",
+    f"{RESULTS}/02_scoring/selection_ld_tag_set_candidates.tsv",
+    f"{RESULTS}/02_scoring/snp_filter_window_status.tsv",
+    f"{RESULTS}/02_scoring/score_filter_chip_summary.json",
+]
+FULL_TARGETS = [
+    f"{RESULTS}/06_final_panel/final_strict_probe_panel.tsv",
+    f"{RESULTS}/06_final_panel/final_strict_probe_panel.bed",
+    f"{RESULTS}/06_final_panel/summary_report.txt",
+    f"{RESULTS}/06_final_panel/validation.json",
+]
+
+
+# Default and explicit stage targets. These names are stable public interfaces.
+rule all:
+    input:
+        FULL_TARGETS if RUN_PROBES else SCORING_TARGETS
+
+
+rule run_annotation:
+    input:
+        ANNOTATION_TARGETS
+
+
+rule run_scoring:
+    input:
+        SCORING_TARGETS
+
+
+rule run_full:
+    input:
+        FULL_TARGETS
+
+
+rule target_windows_by_chrom:
+    input:
+        INPUTS["windows"]
+    output:
+        f"{RESULTS}/00_inputs/by_chrom/{{chrom}}/windows.bed"
+    params:
+        chrom=lambda wildcards: wildcards.chrom
+    conda:
+        "envs/core.yaml"
+    shell:
+        "python {SCRIPTS:q}/chromosome_partitions.py windows "
+        "--input {input:q} --chromosome {params.chrom:q} --output {output:q}"
+
+
+rule gather_target_windows:
+    input:
+        WINDOW_SHARDS
+    output:
+        TARGET_WINDOWS
+    run:
+        concatenate_files(input, output[0])
+
+
+if GENOTYPE_SOURCE == "plink_bfile":
+    BFILE = INPUTS["bfile"]
+
+    rule plink_frequencies_by_chrom:
+        input:
+            bed=BFILE + ".bed",
+            bim=BFILE + ".bim",
+            fam=BFILE + ".fam",
+        output:
+            f"{RESULTS}/00_plink/by_chrom/{{chrom}}/variants.afreq"
+        params:
+            bfile=BFILE,
+            prefix=lambda wildcards: f"{RESULTS}/00_plink/by_chrom/{wildcards.chrom}/variants",
+            outdir=lambda wildcards: f"{RESULTS}/00_plink/by_chrom/{wildcards.chrom}",
+            chrom=lambda wildcards: wildcards.chrom,
+            plink2=PARAMS.get("plink2_executable", "plink2"),
+            chr_set=PARAMS.get("plink_chr_set", 31),
+        threads:
+            PARAMS.get("threads", 4)
+        log:
+            f"{RESULTS}/logs/plink2_frequency/{{chrom}}.log"
+        conda:
+            "envs/plink.yaml"
+        shell:
+            "mkdir -p {params.outdir:q} $(dirname {log:q}) && "
+            "{params.plink2:q} --bfile {params.bfile:q} --chr {params.chrom:q} --freq "
+            "--allow-extra-chr --chr-set {params.chr_set} --threads {threads} "
+            "--out {params.prefix:q} > {log:q} 2>&1"
+
+    rule plink_ld_tag_sets_by_chrom:
+        input:
+            bed=BFILE + ".bed",
+            bim=BFILE + ".bim",
+            fam=BFILE + ".fam",
+            windows=f"{RESULTS}/00_inputs/by_chrom/{{chrom}}/windows.bed",
+        output:
+            tags=f"{RESULTS}/00_plink/by_chrom/{{chrom}}/window_ld_tag_sets.tsv",
+            summary=f"{RESULTS}/00_plink/by_chrom/{{chrom}}/window_ld_tag_sets.summary.json",
+        params:
+            bfile=BFILE,
+            plink=PARAMS.get("plink_executable", "plink"),
+            maf=PARAMS.get("ld_maf", 0.05),
+            tag_kb=PARAMS.get("ld_tag_kb", 100),
+            tag_r2=PARAMS.get("ld_tag_r2", 0.8),
+            jobs=PARAMS.get("ld_jobs", 1),
+            memory=PARAMS.get("ld_memory_mb_per_job", 2048),
+            chr_set=PARAMS.get("plink_chr_set", 31),
+            boundary=PARAMS.get("ld_window_boundary", "study_compatible"),
+        threads:
+            PARAMS.get("ld_jobs", 1)
+        log:
+            f"{RESULTS}/logs/plink_ld_tag_sets/{{chrom}}.log"
+        conda:
+            "envs/plink.yaml"
+        shell:
+            "mkdir -p $(dirname {log:q}) && "
+            "python {SCRIPTS:q}/build_plink_tag_sets.py "
+            "--bfile {params.bfile:q} --windows {input.windows:q} "
+            "--plink {params.plink:q} --output {output.tags:q} "
+            "--summary {output.summary:q} --maf {params.maf} "
+            "--tag-kb {params.tag_kb} --tag-r2 {params.tag_r2} "
+            "--jobs {params.jobs} --memory-mb {params.memory} "
+            "--chr-set {params.chr_set} --window-boundary {params.boundary:q} "
+            "> {log:q} 2>&1"
+
+else:
+    BFILE = ""
+
+    rule subset_precomputed_frequencies:
+        input:
+            INPUTS["afreq"]
+        output:
+            f"{RESULTS}/00_plink/by_chrom/{{chrom}}/variants.afreq"
+        params:
+            chrom=lambda wildcards: wildcards.chrom
+        conda:
+            "envs/core.yaml"
+        shell:
+            "python {SCRIPTS:q}/chromosome_partitions.py afreq "
+            "--input {input:q} --chromosome {params.chrom:q} --output {output:q}"
+
+    rule subset_precomputed_ld_tag_sets:
+        input:
+            tags=INPUTS["ld_tag_sets"],
+            windows=f"{RESULTS}/00_inputs/by_chrom/{{chrom}}/windows.bed",
+        output:
+            tags=f"{RESULTS}/00_plink/by_chrom/{{chrom}}/window_ld_tag_sets.tsv",
+            summary=f"{RESULTS}/00_plink/by_chrom/{{chrom}}/window_ld_tag_sets.summary.json",
+        params:
+            chrom=lambda wildcards: wildcards.chrom
+        conda:
+            "envs/core.yaml"
+        shell:
+            "python {SCRIPTS:q}/chromosome_partitions.py ld-tag-sets "
+            "--input {input.tags:q} --windows {input.windows:q} "
+            "--chromosome {params.chrom:q} --output {output.tags:q} "
+            "--summary {output.summary:q}"
+
+
+rule gather_frequencies:
+    input:
+        AFREQ_SHARDS
+    output:
+        AFREQ
+    run:
+        concatenate_files(input, output[0], headered=True)
+
+
+rule gather_ld_tag_sets:
+    input:
+        tags=LD_SHARDS,
+        summaries=LD_SUMMARY_SHARDS,
+    output:
+        tags=LD_TAG_SETS,
+        summary=f"{RESULTS}/00_plink/window_ld_tag_sets.summary.json",
+    run:
+        concatenate_files(input.tags, output.tags)
+        parts = []
+        for chrom, path in zip(TARGET_CHROMS, map(str, input.summaries)):
+            with open(path, encoding="utf-8") as handle:
+                item = json.load(handle)
+            item["chromosome"] = chrom
+            parts.append(item)
+        summary = {
+            "method": "chromosome-scattered PLINK 1.9 --show-tags LD tag sets"
+                      if GENOTYPE_SOURCE == "plink_bfile"
+                      else "chromosome-partitioned precomputed LD tag sets",
+            "target_chromosomes": TARGET_CHROMS,
+            "windows": sum(item.get("windows", 0) for item in parts),
+            "windows_without_ld_tag_sets": sum(
+                item.get("windows_without_ld_tag_sets", 0) for item in parts
+            ),
+            "ld_tag_sets_total": sum(item.get("ld_tag_sets_total", 0) for item in parts),
+            "chromosome_summaries": parts,
+        }
+        for key in (
+            "bfile_prefix", "plink_executable", "plink_version", "bfile_variants",
+            "bfile_samples", "parameters",
+        ):
+            values = [item[key] for item in parts if key in item]
+            if values:
+                if any(value != values[0] for value in values[1:]):
+                    raise WorkflowError(f"Inconsistent {key} across LD chromosome shards")
+                summary[key] = values[0]
+        Path(str(output.summary)).parent.mkdir(parents=True, exist_ok=True)
+        Path(str(output.summary)).write_text(
+            json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+        )
+
+
+if CUSTOM_TRACKS:
+    rule weighted_region_manifest:
+        input:
+            [track["path"] for track in CUSTOM_TRACKS]
+        output:
+            WEIGHTED_MANIFEST
+        run:
+            Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
+            with open(output[0], "w", encoding="utf-8") as handle:
+                handle.write("name\tpath\tweight\n")
+                for track in CUSTOM_TRACKS:
+                    handle.write(
+                        f"{track['name']}\t{os.path.abspath(track['path'])}"
+                        f"\t{track['weight']}\n"
+                    )
+
+
+if INCLUDE_VEP:
+    rule vep_scores:
+        input:
+            variants=AFREQ,
+            vep=INPUTS["vep"],
+            weights=config["weights"],
+        output:
+            scores=VEP_SCORES,
+            summary=f"{RESULTS}/01_annotation/vep_scores.summary.json",
+        log:
+            f"{RESULTS}/logs/vep_scores.log",
+        conda:
+            "envs/core.yaml"
+        shell:
+            "python {SCRIPTS:q}/vep_to_scores.py "
+            "--variants {input.variants:q} --vep {input.vep:q} "
+            "--weights {input.weights:q} --output {output.scores:q} "
+            "--summary {output.summary:q} > {log:q} 2>&1"
+
+
+STUDY_FLAGS = ""
+if PROFILE == "study":
+    STUDY_FLAGS = " ".join([
+        "--con200m " + shlex.quote(INPUTS["conserved_200m"]),
+        "--con100v " + shlex.quote(INPUTS["conserved_100v"]),
+        "--qtl " + shlex.quote(INPUTS["qtl"]),
+        "--literature " + shlex.quote(INPUTS["literature"]),
+        "--expression " + shlex.quote(INPUTS["expression"]),
+        "--local-core " + shlex.quote(INPUTS["local_adaptation"]),
+        "--pur-core " + shlex.quote(INPUTS["pur_local_adaptation"]),
+        "--domestication-core " + shlex.quote(INPUTS["domestication"]),
+    ])
+
+
+rule score_candidates:
+    input:
+        windows=TARGET_WINDOWS,
+        ld_tag_sets=LD_TAG_SETS,
+        maf=AFREQ,
+        annotation=VEP_SCORES if INCLUDE_VEP else [],
+        con200m=INPUTS["conserved_200m"] if PROFILE == "study" else [],
+        con100v=INPUTS["conserved_100v"] if PROFILE == "study" else [],
+        qtl=INPUTS["qtl"] if PROFILE == "study" else [],
+        literature=INPUTS["literature"] if PROFILE == "study" else [],
+        expression=INPUTS["expression"] if PROFILE == "study" else [],
+        local_core=INPUTS["local_adaptation"] if PROFILE == "study" else [],
+        pur_core=INPUTS["pur_local_adaptation"] if PROFILE == "study" else [],
+        domestication_core=INPUTS["domestication"] if PROFILE == "study" else [],
+        weighted=WEIGHTED_MANIFEST if CUSTOM_TRACKS else [],
+        weights=config["weights"],
+    output:
+        scores=f"{RESULTS}/02_scoring/snp_filter_snp_scores.tsv",
+        best=f"{RESULTS}/02_scoring/snp_filter_important_ld_tag_set_snp.tsv",
+        candidates=f"{RESULTS}/02_scoring/selection_ld_tag_set_candidates.tsv",
+        status=f"{RESULTS}/02_scoring/snp_filter_window_status.tsv",
+        affected=f"{RESULTS}/02_scoring/selection_affected_windows.tsv",
+        candidate_bed=f"{RESULTS}/02_scoring/selection_candidates.bed",
+        summary=f"{RESULTS}/02_scoring/score_filter_chip_summary.json",
+    params:
+        outdir=f"{RESULTS}/02_scoring",
+        top=PARAMS.get("candidates_per_window", 10),
+        profile=PROFILE,
+        study_flags=STUDY_FLAGS,
+        annotation_flag=("--annotation " + shlex.quote(VEP_SCORES)) if INCLUDE_VEP else "",
+        weighted_flag=("--weighted-regions " + shlex.quote(WEIGHTED_MANIFEST)) if CUSTOM_TRACKS else "",
+        aggregation=SCORING.get("region_aggregation", "sum"),
+        maf_flag="" if SCORING.get("include_maf", True) else "--disable-maf-score",
+        current_flag=("--current-sites " + shlex.quote(INPUTS["current_sites"]))
+                     if INPUTS.get("current_sites", "") else "",
+        exclude=" ".join(
+            "--exclude-chrom " + shlex.quote(value)
+            for value in PARAMS.get("exclude_chromosomes", [])
+        ),
+    log:
+        f"{RESULTS}/logs/score_candidates.log",
+    conda:
+        "envs/core.yaml"
+    shell:
+        "python {SCRIPTS:q}/score_candidates.py "
+        "--windows {input.windows:q} --ld-tag-sets {input.ld_tag_sets:q} "
+        "--maf {input.maf:q} --weights {input.weights:q} "
+        "--outdir {params.outdir:q} --top-per-window {params.top} "
+        "--profile {params.profile:q} --region-aggregation {params.aggregation:q} "
+        "{params.annotation_flag} {params.study_flags} {params.weighted_flag} "
+        "{params.maf_flag} {params.current_flag} {params.exclude} "
+        "> {log:q} 2>&1"
+
+
+rule prepare_probe_candidates_by_chrom:
+    input:
+        candidates=rules.score_candidates.output.candidates,
+        reference=INPUTS["reference"],
+        fai=INPUTS["reference_fai"],
+    output:
+        table=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.tsv",
+        fasta=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.fa",
+        bed=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.bed",
+        sites=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_sites.bed",
+        summary=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/prepare_summary.tsv",
+    params:
+        outdir=lambda wildcards: f"{RESULTS}/03_probe_candidates/by_chrom/{wildcards.chrom}",
+        chrom=lambda wildcards: wildcards.chrom,
+        rank=PARAMS.get("candidates_per_window", 10),
+        left=PARAMS.get("flank_left", 121),
+        right=PARAMS.get("flank_right", 120),
+    log:
+        f"{RESULTS}/logs/prepare_probe_candidates/{{chrom}}.log",
+    conda:
+        "envs/core.yaml"
+    shell:
+        "mkdir -p $(dirname {log:q}) && "
+        "python {SCRIPTS:q}/prepare_oligominer_candidates.py "
+        "--candidates {input.candidates:q} --reference {input.reference:q} --fai {input.fai:q} "
+        "--outdir {params.outdir:q} --chromosome {params.chrom:q} "
+        "--max-rank {params.rank} --flank-left {params.left} --flank-right {params.right} "
+        "> {log:q} 2>&1"
+
+
+rule gather_probe_candidates:
+    input:
+        table=expand(
+            f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.tsv",
+            chrom=TARGET_CHROMS,
+        ),
+        fasta=expand(
+            f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.fa",
+            chrom=TARGET_CHROMS,
+        ),
+        bed=expand(
+            f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.bed",
+            chrom=TARGET_CHROMS,
+        ),
+        sites=expand(
+            f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_sites.bed",
+            chrom=TARGET_CHROMS,
+        ),
+        summaries=expand(
+            f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/prepare_summary.tsv",
+            chrom=TARGET_CHROMS,
+        ),
+    output:
+        table=f"{RESULTS}/03_probe_candidates/oligominer_candidate_flanks.tsv",
+        fasta=f"{RESULTS}/03_probe_candidates/oligominer_candidate_flanks.fa",
+        bed=f"{RESULTS}/03_probe_candidates/oligominer_candidate_flanks.bed",
+        sites=f"{RESULTS}/03_probe_candidates/oligominer_candidate_sites.bed",
+        summary=f"{RESULTS}/03_probe_candidates/prepare_summary.tsv",
+    run:
+        concatenate_files(input.table, output.table, headered=True)
+        concatenate_files(input.fasta, output.fasta)
+        concatenate_files(input.bed, output.bed)
+        concatenate_files(input.sites, output.sites)
+        merge_count_tables(
+            input.summaries,
+            output.summary,
+            constant_metrics=("flank_left", "flank_right"),
+        )
+
+
+rule oligominer_reference_resources:
+    input:
+        reference=INPUTS["reference"]
+    output:
+        marker=f"{RESULTS}/04_oligominer/shared/resources.complete"
+    params:
+        index=f"{RESULTS}/04_oligominer/shared/reference_index",
+        jellyfish=f"{RESULTS}/04_oligominer/shared/reference.25mer.jf",
+    threads:
+        PARAMS.get("threads", 4)
+    log:
+        f"{RESULTS}/logs/oligominer_resources.log"
+    conda:
+        "envs/oligominer-legacy.yaml"
+    shell:
+        "bash {SCRIPTS:q}/build_oligominer_resources.sh "
+        "--reference {input.reference:q} --index {params.index:q} "
+        "--jellyfish {params.jellyfish:q} --threads {threads} "
+        "--marker {output.marker:q} > {log:q} 2>&1"
+
+
+rule oligominer_screen_by_chrom:
+    input:
+        table=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.tsv",
+        fasta=f"{RESULTS}/03_probe_candidates/by_chrom/{{chrom}}/oligominer_candidate_flanks.fa",
+        reference=INPUTS["reference"],
+        resources=rules.oligominer_reference_resources.output.marker,
+        vendor=[
+            f"{VENDOR_OLIGO}/blockParse.py",
+            f"{VENDOR_OLIGO}/outputClean.py",
+            f"{VENDOR_OLIGO}/kmerFilter.py",
+        ],
+    output:
+        filtered=f"{RESULTS}/04_oligominer/by_chrom/{{chrom}}/blockparse.flt.kmer.bed",
+        status=f"{RESULTS}/04_oligominer/by_chrom/{{chrom}}/selection_probe_status.tsv",
+        status_summary=f"{RESULTS}/04_oligominer/by_chrom/{{chrom}}/selection_probe_status.summary.tsv",
+    params:
+        input_dir=lambda wildcards: f"{RESULTS}/03_probe_candidates/by_chrom/{wildcards.chrom}",
+        outdir=lambda wildcards: f"{RESULTS}/04_oligominer/by_chrom/{wildcards.chrom}",
+        index=f"{RESULTS}/04_oligominer/shared/reference_index",
+        jellyfish=f"{RESULTS}/04_oligominer/shared/reference.25mer.jf",
+    threads:
+        PARAMS.get("threads", 4)
+    log:
+        f"{RESULTS}/logs/oligominer/{{chrom}}.log",
+    conda:
+        "envs/oligominer-legacy.yaml"
+    shell:
+        "mkdir -p $(dirname {log:q}) && "
+        "bash {SCRIPTS:q}/run_oligominer.sh --input-dir {params.input_dir:q} "
+        "--reference {input.reference:q} --outdir {params.outdir:q} "
+        "--oligominer {VENDOR_OLIGO:q} --python python --threads {threads} "
+        "--index {params.index:q} --jellyfish {params.jellyfish:q} > {log:q} 2>&1"
+
+
+rule gather_oligominer_results:
+    input:
+        filtered=expand(
+            f"{RESULTS}/04_oligominer/by_chrom/{{chrom}}/blockparse.flt.kmer.bed",
+            chrom=TARGET_CHROMS,
+        ),
+        status=expand(
+            f"{RESULTS}/04_oligominer/by_chrom/{{chrom}}/selection_probe_status.tsv",
+            chrom=TARGET_CHROMS,
+        ),
+        summaries=expand(
+            f"{RESULTS}/04_oligominer/by_chrom/{{chrom}}/selection_probe_status.summary.tsv",
+            chrom=TARGET_CHROMS,
+        ),
+    output:
+        filtered=f"{RESULTS}/04_oligominer/blockparse.flt.kmer.bed",
+        status=f"{RESULTS}/04_oligominer/selection_probe_status.tsv",
+        status_summary=f"{RESULTS}/04_oligominer/selection_probe_status.summary.tsv",
+    run:
+        concatenate_files(input.filtered, output.filtered)
+        concatenate_files(input.status, output.status, headered=True)
+        merge_count_tables(
+            input.summaries, output.status_summary, header=("status", "count")
+        )
+
+
+rule select_probe_designs:
+    input:
+        candidates=rules.gather_probe_candidates.output.table,
+        filtered=rules.gather_oligominer_results.output.filtered,
+    output:
+        all=f"{RESULTS}/05_probe_selection/missing_probe_designs.all.tsv",
+        strict=f"{RESULTS}/05_probe_selection/missing_probe_designs.strict.tsv",
+        rescue=f"{RESULTS}/05_probe_selection/missing_probe_designs.rescue.tsv",
+        summary=f"{RESULTS}/05_probe_selection/missing_probe_designs.summary.tsv",
+    params:
+        outdir=f"{RESULTS}/05_probe_selection",
+    log:
+        f"{RESULTS}/logs/select_probe_designs.log",
+    conda:
+        "envs/core.yaml"
+    shell:
+        "python {SCRIPTS:q}/select_probe_designs.py --candidates {input.candidates:q} "
+        "--filtered-bed {input.filtered:q} --outdir {params.outdir:q} > {log:q} 2>&1"
+
+
+rule assemble_panel:
+    input:
+        candidates=rules.score_candidates.output.candidates,
+        designs=rules.select_probe_designs.output.strict,
+    output:
+        panel=f"{RESULTS}/06_final_panel/final_strict_probe_panel.tsv",
+        bed=f"{RESULTS}/06_final_panel/final_strict_probe_panel.bed",
+        unresolved=f"{RESULTS}/06_final_panel/unresolved_windows.tsv",
+        summary=f"{RESULTS}/06_final_panel/summary.json",
+        report=f"{RESULTS}/06_final_panel/summary_report.txt",
+    conda:
+        "envs/core.yaml"
+    shell:
+        "python {SCRIPTS:q}/assemble_panel.py --candidates {input.candidates:q} "
+        "--strict-designs {input.designs:q} --output {output.panel:q} --bed {output.bed:q} "
+        "--unresolved {output.unresolved:q} --summary {output.summary:q} "
+        "--summary-report {output.report:q}"
+
+
+rule validate_panel:
+    input:
+        panel=rules.assemble_panel.output.panel,
+        reference=INPUTS["reference"],
+        fai=INPUTS["reference_fai"],
+    output:
+        f"{RESULTS}/06_final_panel/validation.json",
+    conda:
+        "envs/core.yaml"
+    shell:
+        "python {SCRIPTS:q}/validate_panel.py --panel {input.panel:q} "
+        "--reference {input.reference:q} --fai {input.fai:q} --output {output:q}"

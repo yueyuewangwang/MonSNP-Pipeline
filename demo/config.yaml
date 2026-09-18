@@ -1,0 +1,42 @@
+results_dir: demo/work/results
+run_probe_design: false
+target_chromosomes:
+  - ECA1
+weights: resources/scoring_weights.tsv
+genotype_source: plink_bfile
+
+inputs:
+  bfile: demo/work/prepared/demo
+  reference: demo/input/reference.fa
+  reference_fai: demo/input/reference.fa.fai
+  windows: demo/work/windows.bed
+  current_sites: ""
+
+scoring:
+  profile: custom
+  include_maf: true
+  include_vep: false
+  region_aggregation: sum
+  weighted_regions:
+    - name: altitude
+      path: demo/input/altitude_regions.bed
+      weight: 25
+    - name: immune
+      path: demo/input/immune_regions.bed
+      weight: 12
+
+parameters:
+  candidates_per_window: 3
+  flank_left: 121
+  flank_right: 120
+  threads: 1
+  plink_executable: plink
+  plink2_executable: plink2
+  plink_chr_set: 31
+  ld_maf: 0.05
+  ld_tag_kb: 100
+  ld_tag_r2: 0.8
+  ld_jobs: 1
+  ld_memory_mb_per_job: 512
+  ld_window_boundary: bed
+  exclude_chromosomes: []

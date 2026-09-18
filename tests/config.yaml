@@ -1,0 +1,37 @@
+results_dir: tests/work/results
+run_probe_design: false
+target_chromosomes:
+  - ECA1
+weights: resources/scoring_weights.tsv
+genotype_source: precomputed
+
+scoring:
+  profile: study
+  include_maf: true
+  include_vep: true
+  region_aggregation: sum
+  weighted_regions: []
+
+inputs:
+  reference: tests/data/reference.fa
+  reference_fai: tests/data/reference.fa.fai
+  windows: tests/data/windows.bed
+  ld_tag_sets: tests/data/ld_tag_sets.tsv
+  afreq: tests/data/variants.afreq
+  vep: tests/data/vep.tsv
+  conserved_200m: tests/data/conserved_200m.tsv
+  conserved_100v: tests/data/conserved_100v.tsv
+  qtl: tests/data/qtl.tsv
+  literature: tests/data/literature.tsv
+  expression: tests/data/expression.tsv
+  local_adaptation: tests/data/local_adaptation.bed
+  pur_local_adaptation: tests/data/pur_local_adaptation.bed
+  domestication: tests/data/domestication.bed
+  current_sites: ""
+
+parameters:
+  candidates_per_window: 3
+  flank_left: 121
+  flank_right: 120
+  threads: 1
+  exclude_chromosomes: []

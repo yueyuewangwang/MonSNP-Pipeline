@@ -1,0 +1,27 @@
+results_dir: tests/work/multichrom_results
+run_probe_design: false
+target_chromosomes: all
+weights: resources/scoring_weights.tsv
+genotype_source: precomputed
+
+inputs:
+  reference: tests/data/reference.fa
+  reference_fai: tests/data/reference.fa.fai
+  windows: tests/data/multichrom_windows.bed
+  afreq: tests/data/multichrom_variants.afreq
+  ld_tag_sets: tests/data/multichrom_ld_tag_sets.tsv
+  current_sites: ""
+
+scoring:
+  profile: custom
+  include_maf: true
+  include_vep: false
+  region_aggregation: sum
+  weighted_regions: []
+
+parameters:
+  candidates_per_window: 1
+  flank_left: 121
+  flank_right: 120
+  threads: 1
+  exclude_chromosomes: []

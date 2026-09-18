@@ -1,0 +1,42 @@
+results_dir: tests/work/plink_custom_results
+run_probe_design: false
+target_chromosomes:
+  - ECA1
+weights: resources/scoring_weights.tsv
+genotype_source: plink_bfile
+
+inputs:
+  bfile: tests/data/plink/tiny
+  reference: tests/data/reference.fa
+  reference_fai: tests/data/reference.fa.fai
+  windows: tests/data/windows.bed
+  current_sites: ""
+
+scoring:
+  profile: custom
+  include_maf: true
+  include_vep: false
+  region_aggregation: sum
+  weighted_regions:
+    - name: altitude
+      path: tests/data/custom_altitude.bed
+      weight: 5
+    - name: priority
+      path: tests/data/custom_priority.bed
+      weight: 20
+
+parameters:
+  candidates_per_window: 3
+  flank_left: 121
+  flank_right: 120
+  threads: 1
+  plink_executable: tests/mock_bin/plink
+  plink2_executable: tests/mock_bin/plink2
+  plink_chr_set: 31
+  ld_maf: 0.05
+  ld_tag_kb: 100
+  ld_tag_r2: 0.8
+  ld_jobs: 1
+  ld_memory_mb_per_job: 128
+  ld_window_boundary: bed
+  exclude_chromosomes: []

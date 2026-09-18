@@ -1,0 +1,12 @@
+name: monsnp-pipeline
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.12.7
+  - snakemake-minimal=9.24.0
+  - conda=25.7.0
+  - pyyaml=6.0.3
+  - plink=1.90b7.7
+  - plink2=2.0.0a.6.9

@@ -1,0 +1,155 @@
+$schema: https://json-schema.org/draft/2020-12/schema
+type: object
+required:
+  - results_dir
+  - run_probe_design
+  - target_chromosomes
+  - weights
+  - genotype_source
+  - inputs
+  - scoring
+properties:
+  results_dir:
+    type: string
+    default: results
+  run_probe_design:
+    type: boolean
+    default: true
+  target_chromosomes:
+    description: Chromosomes to process; all resolves from inputs.windows.
+    oneOf:
+      - const: all
+      - type: array
+        minItems: 1
+        uniqueItems: true
+        items:
+          type: string
+          minLength: 1
+          pattern: ^[A-Za-z0-9_.-]+$
+  weights:
+    type: string
+    default: resources/scoring_weights.tsv
+  genotype_source:
+    type: string
+    enum: [plink_bfile, precomputed]
+  inputs:
+    type: object
+    required: [reference, reference_fai, windows]
+    properties:
+      bfile:
+        type: string
+        description: Prefix shared by PLINK BED, BIM, and FAM files.
+      afreq:
+        type: string
+        description: Precomputed biallelic PLINK2 AFREQ table.
+      ld_tag_sets:
+        type: string
+        description: Precomputed window LD tag set table.
+      reference: {type: string}
+      reference_fai: {type: string}
+      windows: {type: string}
+      vep: {type: string}
+      conserved_200m: {type: string}
+      conserved_100v: {type: string}
+      qtl: {type: string}
+      literature: {type: string}
+      expression: {type: string}
+      local_adaptation: {type: string}
+      pur_local_adaptation: {type: string}
+      domestication: {type: string}
+      current_sites: {type: string, default: ""}
+  scoring:
+    type: object
+    required: [profile]
+    properties:
+      profile:
+        type: string
+        enum: [study, custom]
+      include_maf:
+        type: boolean
+        default: true
+      include_vep:
+        type: boolean
+        default: false
+      region_aggregation:
+        type: string
+        enum: [sum, max, first]
+        default: sum
+      weighted_regions:
+        type: array
+        default: []
+        items:
+          type: object
+          required: [name, path, weight]
+          properties:
+            name:
+              type: string
+              minLength: 1
+              pattern: ^[^\t\r\n]+$
+            path: {type: string, minLength: 1}
+            weight: {type: number}
+  parameters:
+    type: object
+    properties:
+      candidates_per_window: {type: integer, minimum: 1, default: 10}
+      flank_left: {type: integer, minimum: 1, default: 121}
+      flank_right: {type: integer, minimum: 1, default: 120}
+      threads: {type: integer, minimum: 1, default: 8}
+      plink_executable: {type: string, default: plink}
+      plink2_executable: {type: string, default: plink2}
+      plink_chr_set: {type: integer, minimum: 1, default: 31}
+      ld_maf: {type: number, minimum: 0, maximum: 0.5, default: 0.05}
+      ld_tag_kb: {type: integer, minimum: 0, default: 100}
+      ld_tag_r2: {type: number, minimum: 0, maximum: 1, default: 0.8}
+      ld_jobs: {type: integer, minimum: 1, default: 1}
+      ld_memory_mb_per_job: {type: integer, minimum: 128, default: 2048}
+      ld_window_boundary:
+        type: string
+        enum: [study_compatible, bed]
+        default: study_compatible
+      exclude_chromosomes:
+        type: array
+        items: {type: string}
+        default: [ECA_M, MT, Y]
+allOf:
+  - if:
+      required: [genotype_source]
+      properties:
+        genotype_source: {const: plink_bfile}
+    then:
+      properties:
+        inputs:
+          required: [bfile]
+    else:
+      properties:
+        inputs:
+          required: [afreq, ld_tag_sets]
+  - if:
+      properties:
+        scoring:
+          properties:
+            profile: {const: study}
+          required: [profile]
+    then:
+      properties:
+        inputs:
+          required:
+            - vep
+            - conserved_200m
+            - conserved_100v
+            - qtl
+            - literature
+            - expression
+            - local_adaptation
+            - pur_local_adaptation
+            - domestication
+  - if:
+      properties:
+        scoring:
+          properties:
+            include_vep: {const: true}
+          required: [include_vep]
+    then:
+      properties:
+        inputs:
+          required: [vep]

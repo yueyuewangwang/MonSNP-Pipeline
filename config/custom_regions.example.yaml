@@ -1,0 +1,47 @@
+results_dir: results_custom
+run_probe_design: false
+target_chromosomes: all
+weights: resources/scoring_weights.tsv
+genotype_source: plink_bfile
+
+# First run tools/prepare_plink_input.py and tools/make_windows.py.
+
+inputs:
+  bfile: data/prepared/my_population
+  reference: data/assembly.fa
+  reference_fai: data/assembly.fa.fai
+  windows: data/design_windows.bed
+  # Add vep only when scoring.include_vep is true.
+  # vep: data/vep_output.tsv.gz
+  current_sites: ""
+
+scoring:
+  profile: custom
+  include_maf: true
+  include_vep: false
+  # sum: add all matching files; max: largest weight; first: list order.
+  region_aggregation: sum
+  weighted_regions:
+    - name: altitude
+      path: data/altitude_candidates.bed
+      weight: 25
+    - name: immune
+      path: data/immune_candidates.bed
+      weight: 12
+
+parameters:
+  candidates_per_window: 10
+  flank_left: 121
+  flank_right: 120
+  threads: 8
+  plink_executable: plink
+  plink2_executable: plink2
+  # Set to the species autosome count used by PLINK (human 22; horse 31).
+  plink_chr_set: 31
+  ld_maf: 0.05
+  ld_tag_kb: 100
+  ld_tag_r2: 0.8
+  ld_jobs: 4
+  ld_memory_mb_per_job: 2048
+  ld_window_boundary: bed
+  exclude_chromosomes: []
