@@ -53,7 +53,7 @@ Requirements: Linux x86-64, Conda/Miniforge, and Git LFS.
 
 ```bash
 git lfs install
-git clone https://github.com/YourName/MonSNP-Pipeline.git
+git clone https://github.com/yueyuewangwang/MonSNP-Pipeline.git
 cd MonSNP-Pipeline
 conda env create -f environment.yaml
 conda activate monsnp-pipeline
